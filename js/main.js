@@ -10,6 +10,7 @@ import { HUD } from './hud.js';
 import { voxelRaycast } from './raycast.js';
 import { Settings } from './settings.js';
 import { Entities, CHARACTERS, randomChar, humanoid } from './entities.js';
+import { getCities } from './villagers.js';
 import { Minimap } from './minimap.js';
 
 const isTouch = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
@@ -114,15 +115,10 @@ scene.fog.near = world.rd * 8;
 scene.fog.far = world.rd * 16 - 6;
 
 // ---------- Jugador ----------
+// v7: el punto de aparición se fija al cargar un mundo (loadWorld, más
+// abajo), no al arrancar: al abrir el juego no hay mundo en curso, solo
+// la pantalla inicial con Menú / Elegir skins.
 const player = new Player(world);
-{
-  const cx = 0, cz = 0;
-  let y = WORLD_Y - 1;
-  while (y > 0 && !world.getBlock(cx, y, cz)) y--;
-  player.setSpawn(cx + 0.5, y + 1.05, cz + 0.5);
-}
-
-world.update(player.pos.x, player.pos.z, 999);   // carga inicial
 
 // ---------- Indicadores ----------
 const highlightGeo = new THREE.EdgesGeometry(
@@ -232,44 +228,209 @@ camera.position.set(player.pos.x, player.pos.y + PLAYER.eyeHeight, player.pos.z)
 camera.rotation.y = yaw;
 camera.rotation.x = pitch;
 
-// ---------- UI ----------
-const overlay   = document.getElementById('overlay');
-const playBtn   = document.getElementById('playBtn');
-const pauseBtn  = document.getElementById('pauseBtn');
+// ---------- UI: pantallas ----------
+// v7: el menú viejo (un solo panel larguísimo) se destruyó. Ahora hay 4
+// pantallas dentro del mismo overlay: inicial (2 botones centrados),
+// skins, menú (mundos + crear + ajustes) y menú dentro del mundo.
+const overlay = document.getElementById('overlay');
+const gameMenuBtn = document.getElementById('gameMenuBtn');
 const sensSlider = document.getElementById('sensSlider');
-const fovSlider  = document.getElementById('fovSlider');
+const fovSlider = document.getElementById('fovSlider');
 const sensVal = document.getElementById('sensVal');
-const fovVal  = document.getElementById('fovVal');
-
-const modeBtn = document.getElementById('modeBtn');
+const fovVal = document.getElementById('fovVal');
 const btnDown = document.getElementById('btnDown');
-let creative = localStorage.getItem('minimc.mode') !== 'survival';
+
+let creative = true;   // lo fija el mundo que se carga, no un botón global
 const inv = {};
 let lastJumpTap = 0;
+let currentWorld = null;     // objeto del mundo en curso (de la lista)
+let pausedFromGame = false;  // el menú se abrió desde una partida en curso
+
+function showScreen(id) {
+  for (const s of ['startScreen', 'skinsScreen', 'menuScreen', 'gameMenuScreen'])
+    document.getElementById(s).classList.toggle('hidden', s !== id);
+  overlay.classList.remove('hidden');
+}
+
 function syncMode() {
-  modeBtn.textContent = creative ? 'Modo: Creativo ✨' : 'Modo: Supervivencia ⛏️';
   if (!creative) player.flying = false;
   drawHearts();
 }
-modeBtn.addEventListener('click', () => {
-  creative = !creative;
-  try { localStorage.setItem('minimc.mode', creative ? 'creative' : 'survival'); } catch (_) {}
-  syncMode();
-});
-syncMode();
 function toggleFly() {
   if (!creative) return;
   player.flying = !player.flying;
   player.vel.y = 0;
 }
 
+// ---------- Mundos guardados (local, en este dispositivo) ----------
+const WORLDS_KEY = 'minimc.worlds.v1';
+let worlds = [];
+function loadWorldsFromStorage() {
+  try { const v = JSON.parse(localStorage.getItem(WORLDS_KEY) || 'null'); return Array.isArray(v) ? v : []; }
+  catch (_) { return []; }
+}
+function persistWorlds() {
+  localStorage.setItem(WORLDS_KEY, JSON.stringify(worlds));
+}
+// Migración una sola vez del mundo único antiguo: si no hay lista y
+// existe el guardado viejo, pasa a ser un mundo más, sin perder nada.
+function migrateOldWorld() {
+  if (worlds.length) return;
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem('minimc.world.v3') || 'null'); } catch (_) {}
+  if (!s) return;
+  worlds.push({
+    id: 'mundo-' + Date.now().toString(36),
+    name: 'Mi mundo',
+    mode: localStorage.getItem('minimc.mode') !== 'survival' ? 'creative' : 'survival',
+    seed: Number.isInteger(s.seed) ? s.seed : Math.floor(Math.random() * 2 ** 31),
+    edits: s.edits || {},
+    createdAt: Date.now(), updatedAt: Date.now(),
+  });
+  try { persistWorlds(); } catch (_) {}
+}
+worlds = loadWorldsFromStorage();
+migrateOldWorld();
+
+function seedFromText(text) {
+  const t = (text || '').trim();
+  if (!t) return Math.floor(Math.random() * 2 ** 31);
+  if (/^-?\d+$/.test(t)) return Math.abs(parseInt(t, 10)) % (2 ** 31);
+  let h = 0;
+  for (let i = 0; i < t.length; i++) h = (Math.imul(31, h) + t.charCodeAt(i)) | 0;
+  return Math.abs(h) % (2 ** 31);
+}
+function fmtDate(ts) {
+  try { return new Date(ts).toLocaleDateString('es', { day: 'numeric', month: 'short' }) + ' ' +
+    new Date(ts).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }); }
+  catch (_) { return ''; }
+}
+function renderWorldsList() {
+  const list = document.getElementById('worldsList');
+  document.getElementById('worldsEmpty').classList.toggle('hidden', worlds.length > 0);
+  list.innerHTML = '';
+  for (const w of worlds) {
+    const edited = w.edits ? Object.values(w.edits).reduce((a, c) => a + Object.keys(c).length, 0) : 0;
+    const el = document.createElement('div');
+    el.className = 'world-item';
+    el.innerHTML = `<b>${w.name || 'Mundo sin nombre'}</b>
+      <div class="world-meta">${w.mode === 'survival' ? 'Supervivencia ⛏️' : 'Creativo ✨'} · Semilla ${w.seed} · ${edited} bloques editados<br>Guardado: ${fmtDate(w.updatedAt)}</div>
+      <div class="world-actions"><button data-act="play">▶ Jugar</button><button data-act="del" class="danger">🗑️ Borrar</button></div>`;
+    el.querySelector('[data-act="play"]').addEventListener('click', () => { loadWorld(w); startGame(); });
+    el.querySelector('[data-act="del"]').addEventListener('click', () => {
+      if (!confirm(`¿Borrar el mundo "${w.name}" para siempre?`)) return;
+      worlds = worlds.filter(x => x.id !== w.id);
+      try { persistWorlds(); } catch (_) {}
+      if (currentWorld && currentWorld.id === w.id) { currentWorld = null; pausedFromGame = false; }
+      renderWorldsList();
+    });
+    list.appendChild(el);
+  }
+  document.getElementById('menuResumeBtn').classList.toggle('hidden', !(pausedFromGame && currentWorld));
+}
+
+// Guarda el mundo en curso en la lista (sin salir de la partida).
+// Devuelve false si el almacenamiento local está lleno.
+function saveCurrentWorld() {
+  if (!currentWorld) return false;
+  currentWorld.seed = world.seed;
+  currentWorld.edits = world.edits;
+  currentWorld.mode = creative ? 'creative' : 'survival';
+  currentWorld.updatedAt = Date.now();
+  currentWorld.timeOfDay = timeOfDay;
+  currentWorld.player = { x: player.pos.x, y: player.pos.y, z: player.pos.z, yaw, pitch };
+  currentWorld.hp = hp;
+  currentWorld.inv = { ...inv };
+  if (!worlds.some(w => w.id === currentWorld.id)) worlds.push(currentWorld);
+  try { persistWorlds(); return true; }
+  catch (_) { return false; }
+}
+// El guardado automático tras editar bloques usa lo mismo, en silencio.
+world.saveHandler = () => { saveCurrentWorld(); };
+
+function loadWorld(w) {
+  // Limpiar el mundo anterior: mallas, aldeas, ciudades y entidades.
+  for (const [, c] of world.chunks) {
+    if (c.mesh) { scene.remove(c.mesh); c.mesh.geometry.dispose(); }
+  }
+  world.chunks.clear();
+  world.vcache.clear();
+  getCities().clear();
+  for (const e of entities.list) scene.remove(e.g);
+  entities.list = [];
+  entities.villages.clear();
+  entities.buildSites = [];
+
+  world.seed = w.seed;
+  world.edits = w.edits || {};
+  creative = w.mode !== 'survival';
+  timeOfDay = typeof w.timeOfDay === 'number' ? w.timeOfDay : 0.25;
+  currentWorld = w;
+  syncMode();
+
+  // Aparición: (0,0) en este mundo, salvo posición guardada.
+  let sy = WORLD_Y - 1;
+  while (sy > 0 && !world.getBlock(0, sy, 0)) sy--;
+  player.setSpawn(0.5, sy + 1.05, 0.5);
+  player.flying = false;
+  player.vel.set(0, 0, 0);
+  hp = typeof w.hp === 'number' ? w.hp : 20;
+  for (const k of Object.keys(inv)) delete inv[k];
+  if (w.inv) Object.assign(inv, w.inv);
+  if (w.player && Number.isFinite(w.player.x)) {
+    player.pos.set(w.player.x, w.player.y, w.player.z);
+    yaw = w.player.yaw || 0; pitch = w.player.pitch || 0;
+  } else {
+    yaw = 0; pitch = 0;
+  }
+  fallY = player.pos.y;
+  camera.position.set(player.pos.x, player.pos.y + PLAYER.eyeHeight, player.pos.z);
+  camera.rotation.y = yaw; camera.rotation.x = pitch;
+  drawHearts();
+  world.update(player.pos.x, player.pos.z, 999);   // carga inicial del mundo
+}
+
+function startGame() {
+  pausedFromGame = false;
+  if (!isTouch) {
+    renderer.domElement.requestPointerLock();
+  } else {
+    playing = true;
+    overlay.classList.add('hidden');
+    gameMenuBtn.classList.remove('hidden');
+    if (screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock('landscape').catch(() => {});
+    }
+  }
+}
+
+function openGameMenu() {
+  if (!currentWorld) { showScreen('startScreen'); return; }
+  pausedFromGame = true;
+  playing = false;
+  const gm = document.getElementById('gameMenuWorld');
+  gm.textContent = `${currentWorld.name || 'Mundo'} · ${creative ? 'Creativo ✨' : 'Supervivencia ⛏️'} · Semilla ${world.seed}`;
+  document.getElementById('saveMsg').textContent = '';
+  showScreen('gameMenuScreen');
+  gameMenuBtn.classList.add('hidden');
+  syncSliderUI();
+}
+
+function pauseGame() {
+  if (document.pointerLockElement) {
+    document.exitPointerLock();   // el handler de pointerlockchange abre el menú
+  } else {
+    openGameMenu();
+  }
+}
+
 function syncSliderUI() {
   const fov = settings.get('fov');
   const sens = settings.get('sensitivity');
   sensSlider.value = sens;
-  fovSlider.value  = fov;
+  fovSlider.value = fov;
   sensVal.textContent = `${sens.toFixed(1)}×`;
-  fovVal.textContent  = `${fov}°`;
+  fovVal.textContent = `${fov}°`;
 }
 
 // Sincronización inmediata + red de seguridad por si el DOM aún no estuviera listo
@@ -299,57 +460,73 @@ settings.onChange((key, value) => {
   if (key === 'sensitivity') input.setSensitivity(value);
 });
 
-function startGame() {
-  if (!isTouch) {
-    renderer.domElement.requestPointerLock();
-  } else {
-    playing = true;
-    overlay.classList.add('hidden');
-    pauseBtn.classList.remove('hidden');
-    if (screen.orientation && screen.orientation.lock) {
-      screen.orientation.lock('landscape').catch(() => {});
-    }
-  }
-}
-
-function pauseGame() {
-  if (document.pointerLockElement) {
-    document.exitPointerLock();
-  } else {
-    playing = false;
-    overlay.classList.remove('hidden');
-    pauseBtn.classList.add('hidden');
-    syncSliderUI();
-  }
-}
-
-document.getElementById('newWorldBtn').addEventListener('click', () => {
-  if (confirm('¿Borrar el mundo guardado y generar uno nuevo?')) { world.resetSave(); location.reload(); }
+// ---------- Botones de las pantallas ----------
+document.getElementById('menuBtn').addEventListener('click', () => { renderWorldsList(); showScreen('menuScreen'); });
+document.getElementById('skinsBtn').addEventListener('click', () => { showScreen('skinsScreen'); });
+document.getElementById('skinsBackBtn').addEventListener('click', () => { showScreen('startScreen'); });
+document.getElementById('menuBackBtn').addEventListener('click', () => {
+  if (pausedFromGame && currentWorld) openGameMenu(); else showScreen('startScreen');
 });
-playBtn.addEventListener('pointerdown', e => { e.preventDefault(); startGame(); });
-pauseBtn.addEventListener('pointerdown', e => { e.preventDefault(); pauseGame(); });
+document.getElementById('menuResumeBtn').addEventListener('click', () => { startGame(); });
+document.getElementById('createWorldBtn').addEventListener('click', () => {
+  document.getElementById('createWorldForm').classList.remove('hidden');
+  document.getElementById('createWorldBtn').classList.add('hidden');
+});
+document.getElementById('cancelCreateBtn').addEventListener('click', () => {
+  document.getElementById('createWorldForm').classList.add('hidden');
+  document.getElementById('createWorldBtn').classList.remove('hidden');
+});
+document.getElementById('confirmCreateBtn').addEventListener('click', () => {
+  if (worlds.length >= 10) { alert('Ya tienes 10 mundos guardados. Borra uno para crear otro.'); return; }
+  const name = document.getElementById('worldNameInput').value.trim() || `Mundo ${worlds.length + 1}`;
+  const mode = document.getElementById('worldModeSelect').value;
+  const seed = seedFromText(document.getElementById('worldSeedInput').value);
+  const w = {
+    id: 'w' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+    name, mode, seed, edits: {},
+    createdAt: Date.now(), updatedAt: Date.now(),
+  };
+  worlds.push(w);
+  try { persistWorlds(); } catch (_) { alert('No se pudo guardar el mundo: el almacenamiento local está lleno.'); worlds = worlds.filter(x => x.id !== w.id); return; }
+  document.getElementById('createWorldForm').classList.add('hidden');
+  document.getElementById('createWorldBtn').classList.remove('hidden');
+  loadWorld(w);
+  startGame();
+});
+document.getElementById('saveWorldBtn').addEventListener('click', () => {
+  const ok = saveCurrentWorld();
+  renderWorldsList();
+  document.getElementById('saveMsg').textContent = ok
+    ? `Guardado ✓ ${new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}`
+    : 'No se pudo guardar: el almacenamiento local está lleno. Borra un mundo y vuelve a intentarlo.';
+});
+document.getElementById('resumeBtn').addEventListener('click', () => { startGame(); });
+document.getElementById('openMenuBtn').addEventListener('click', () => { renderWorldsList(); showScreen('menuScreen'); });
+document.getElementById('toStartBtn').addEventListener('click', () => { pausedFromGame = false; showScreen('startScreen'); });
+gameMenuBtn.addEventListener('pointerdown', e => { e.preventDefault(); pauseGame(); });
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
   if (locked) {
     playing = true;
     overlay.classList.add('hidden');
-    pauseBtn.classList.remove('hidden');
+    gameMenuBtn.classList.remove('hidden');
   } else if (!isTouch) {
-    playing = false;
-    overlay.classList.remove('hidden');
-    pauseBtn.classList.add('hidden');
-    syncSliderUI();
+    // Salir con Esc (o perder el bloqueo) abre el menú del juego, no
+    // la pantalla inicial: así Guardar queda a un toque.
+    if (currentWorld) openGameMenu();
+    else { playing = false; overlay.classList.remove('hidden'); gameMenuBtn.classList.add('hidden'); showScreen('startScreen'); }
   }
 });
 
 addEventListener('keydown', e => {
   const n = parseInt(e.key, 10);
   if (n >= 1 && n <= BLOCK_IDS.length) hud.setSelected(n - 1);
-  if (e.code === 'Escape' && !isTouch) pauseGame();
+  if (e.code === 'Escape' && !isTouch && playing) pauseGame();
   if (e.code === 'KeyF' && playing && !e.repeat) toggleFly();
   if (e.code === 'KeyV' && playing && !e.repeat) toggleView();
 });
+
 addEventListener('wheel', e => {
   if (!document.pointerLockElement) return;
   const dir = e.deltaY > 0 ? 1 : -1;

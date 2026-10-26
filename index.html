@@ -29,17 +29,46 @@
   <button id="btnDown" class="action-btn hidden" aria-label="Bajar">⬇️</button>
   <button id="btnAtk" class="action-btn" aria-label="Atacar">⚔️</button>
   <button id="viewBtn" aria-label="Cámara">👁️</button>
-  <button id="pauseBtn" class="hidden" aria-label="Ajustes">⚙️</button>
+  <button id="gameMenuBtn" class="hidden" aria-label="Menú del juego">☰</button>
 
   <div id="overlay">
-    <div class="panel">
+    <!-- Pantalla inicial: solo dos botones, en el medio de la pantalla -->
+    <div class="panel" id="startScreen">
       <h1>⛏️ Mini Minecraft</h1>
+      <p class="pick">¿Por dónde empezamos?</p>
+      <button id="menuBtn" class="play-btn">☰ Menú</button>
+      <button id="skinsBtn" class="play-btn">👤 Elegir skins</button>
+    </div>
 
+    <!-- Elegir skins -->
+    <div class="panel hidden" id="skinsScreen">
+      <h1>👤 Elegir skins</h1>
       <p class="pick">Elige tu personaje</p>
       <div id="chars" class="chars"></div>
-      <button id="playBtn" class="play-btn">Jugar</button>
-      <button id="modeBtn" class="ghost-btn">Modo: Creativo</button>
-      <button id="newWorldBtn" class="ghost-btn">🗑️ Nuevo mundo</button>
+      <button id="skinsBackBtn" class="ghost-btn">← Volver</button>
+    </div>
+
+    <!-- Menú: mundos guardados + crear + ajustes -->
+    <div class="panel hidden" id="menuScreen">
+      <h1>☰ Menú</h1>
+      <h2 class="menu-sub">Mundos guardados</h2>
+      <div id="worldsList"></div>
+      <p id="worldsEmpty" class="pick hidden">Aún no tienes mundos guardados. Crea uno abajo.</p>
+      <button id="createWorldBtn" class="play-btn">＋ Crear nuevo mundo</button>
+      <div id="createWorldForm" class="hidden">
+        <input id="worldNameInput" class="field" type="text" maxlength="40" placeholder="Nombre del mundo (opcional)">
+        <label class="setting-row">
+          <span class="setting-label"><span>Modo de juego</span></span>
+          <select id="worldModeSelect" class="field">
+            <option value="creative">Creativo ✨</option>
+            <option value="survival">Supervivencia ⛏️</option>
+          </select>
+        </label>
+        <input id="worldSeedInput" class="field" type="text" maxlength="40" placeholder="Semilla (opcional: número o texto)">
+        <p class="pick">Si dejas la semilla vacía, se genera una al azar.</p>
+        <button id="confirmCreateBtn" class="play-btn">🌍 Crear y jugar</button>
+        <button id="cancelCreateBtn" class="ghost-btn">Cancelar</button>
+      </div>
 
       <div class="settings">
         <label class="setting-row">
@@ -64,9 +93,9 @@
         <li><b>Arrastrar</b> mirar</li>
         <li><b>Toque rápido</b> colocar bloque</li>
         <li><b>Mantener pulsado</b> romper con grietas</li>
-        <li><b>⬆️</b> saltar · <b>doble toque</b> volar</li>
+        <li><b>⬆️</b> subir · <b>doble toque</b> volar</li>
         <li><b>⬇️</b> bajar (volando)</li>
-        <li><b>⚙️</b> ajustes en partida</li>
+        <li><b>☰</b> menú del juego en partida</li>
       </ul>
       <ul class="desktop-only">
         <li><b>W A S D</b> moverse</li>
@@ -74,8 +103,21 @@
         <li><b>Doble espacio / F</b> volar (Shift baja)</li>
         <li><b>Clic izq./der.</b> romper (mantener) / colocar</li>
         <li><b>1–9 / rueda</b> elegir bloque</li>
-        <li><b>Esc</b> pausar y ajustar</li>
+        <li><b>Esc</b> menú del juego</li>
       </ul>
+      <button id="menuResumeBtn" class="ghost-btn hidden">▶ Volver al juego</button>
+      <button id="menuBackBtn" class="ghost-btn">← Volver</button>
+    </div>
+
+    <!-- Menú dentro del mundo -->
+    <div class="panel hidden" id="gameMenuScreen">
+      <h1>⏸️ Menú del juego</h1>
+      <p id="gameMenuWorld" class="pick"></p>
+      <button id="saveWorldBtn" class="play-btn">💾 Guardar mundo</button>
+      <p id="saveMsg" class="pick"></p>
+      <button id="resumeBtn" class="play-btn">▶ Continuar</button>
+      <button id="openMenuBtn" class="ghost-btn">☰ Mundos y ajustes</button>
+      <button id="toStartBtn" class="ghost-btn">🏠 Pantalla inicial</button>
     </div>
   </div>
 

@@ -155,9 +155,14 @@ export class VoxelWorld {
     if (lz === 0) nb(cx, cz - 1);
     if (lz === CS - 1) nb(cx, cz + 1);
   }
+  // v7: el guardado automático va al sistema de mundos (main.js pone
+  // aquí su función). Sin handler, se mantiene el guardado antiguo de
+  // un solo mundo, para no romper nada si se usa el mundo sin main.
+  saveHandler = null;
   scheduleSave() {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
+      if (this.saveHandler) { try { this.saveHandler(); } catch (_) {} return; }
       try { localStorage.setItem(KEY, JSON.stringify({ seed: this.seed, edits: this.edits })); } catch (_) {}
     }, 800);
   }
