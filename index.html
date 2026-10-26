@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mini Minecraft">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#87ceeb">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Mini Minecraft</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="crosshair"></div>
+  <div id="hud"></div>
+  <div id="hotbar"></div>
+  <div id="hearts"></div>
+  <canvas id="minimap" width="48" height="48"></canvas>
+  <div id="dmg"></div>
+
+  <div id="joystick"><div id="knob"></div></div>
+
+  <button id="btnJump" class="action-btn jump" aria-label="Saltar">⬆️</button>
+  <button id="btnDown" class="action-btn hidden" aria-label="Bajar">⬇️</button>
+  <button id="btnAtk" class="action-btn" aria-label="Atacar">⚔️</button>
+  <button id="viewBtn" aria-label="Cámara">👁️</button>
+  <button id="pauseBtn" class="hidden" aria-label="Ajustes">⚙️</button>
+
+  <div id="overlay">
+    <div class="panel">
+      <h1>⛏️ Mini Minecraft</h1>
+
+      <p class="pick">Elige tu personaje</p>
+      <div id="chars" class="chars"></div>
+      <button id="playBtn" class="play-btn">Jugar</button>
+      <button id="modeBtn" class="ghost-btn">Modo: Creativo</button>
+      <button id="newWorldBtn" class="ghost-btn">🗑️ Nuevo mundo</button>
+
+      <div class="settings">
+        <label class="setting-row">
+          <span class="setting-label">
+            <span>Sensibilidad cámara</span>
+            <b id="sensVal">1.0×</b>
+          </span>
+          <input type="range" id="sensSlider" min="0.2" max="3" step="0.1" value="1">
+        </label>
+
+        <label class="setting-row">
+          <span class="setting-label">
+            <span>Campo visual (FOV)</span>
+            <b id="fovVal">80°</b>
+          </span>
+          <input type="range" id="fovSlider" min="55" max="110" step="1" value="80">
+        </label>
+      </div>
+
+      <ul class="touch-only">
+        <li><b>Joystick izq.</b> moverse</li>
+        <li><b>Arrastrar</b> mirar</li>
+        <li><b>Toque rápido</b> colocar bloque</li>
+        <li><b>Mantener pulsado</b> romper con grietas</li>
+        <li><b>⬆️</b> saltar · <b>doble toque</b> volar</li>
+        <li><b>⬇️</b> bajar (volando)</li>
+        <li><b>⚙️</b> ajustes en partida</li>
+      </ul>
+      <ul class="desktop-only">
+        <li><b>W A S D</b> moverse</li>
+        <li><b>Espacio</b> saltar · <b>Shift</b> correr</li>
+        <li><b>Doble espacio / F</b> volar (Shift baja)</li>
+        <li><b>Clic izq./der.</b> romper (mantener) / colocar</li>
+        <li><b>1–9 / rueda</b> elegir bloque</li>
+        <li><b>Esc</b> pausar y ajustar</li>
+      </ul>
+    </div>
+  </div>
+
+  <div id="rotateOverlay">
+    <div class="rotate-panel">
+      <div class="rotate-icon">📱</div>
+      <p>Gira el dispositivo a horizontal</p>
+    </div>
+  </div>
+
+  <script type="importmap">
+  { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
