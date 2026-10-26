@@ -303,6 +303,9 @@ export function getOrCreateCity(x, z) {
       id, cx: Math.floor(x), cz: Math.floor(z), radius: 28,
       sites: [], projects: [], rulerId: null, founded: 0,
       districts: { vivienda: 0, militar: 0, civico: 0, agro: 0, util: 0 },
+      // v6: memoria de terreno 3D (ver "Encuesta de terreno" más abajo)
+      survey: new Map(), surveyGrid: null, surveyIdx: 0, flatSpots: [],
+      surveyStats: {}, lastSurveyAt: 0, lastSeen: Date.now(), seeded: false,
     };
     CITIES.set(id, c);
   }
@@ -343,6 +346,20 @@ function overlapsSites(sites, ox, oz, w, d, margin = 4) {
 
 export function findBuildSite(world, home, city, sizeW, sizeD, preferEdge = false) {
   const baseX = city.cx, baseZ = city.cz, sites = city.sites;
+  // v6: primero los sitios planos ya aprendidos en la encuesta, que se
+  // vuelven a verificar en detalle (la encuesta es aproximada, paso 4).
+  if (city.flatSpots) {
+    for (const s of city.flatSpots) {
+      const ox = s.x - Math.floor(sizeW / 2), oz = s.z - Math.floor(sizeD / 2);
+      if (overlapsSites(sites, ox, oz, sizeW, sizeD)) continue;
+      if (!isFlat(world, ox, oz, sizeW, sizeD, 1)) continue;
+      const h0 = world.heightAt(ox, oz);
+      if (areaHasStructure(world, ox, h0, oz, sizeW, sizeD, 8)) continue;
+      const ground = world.getBlock(ox, h0, oz);
+      if (ground !== 1 && ground !== 2 && ground !== 6) continue;
+      return { x: ox, z: oz, y: h0, w: sizeW, d: sizeD };
+    }
+  }
   const maxR = Math.max(city.radius + 16, 40);
   const minR = preferEdge ? Math.max(10, city.radius * 0.55) : 5;
 
@@ -384,6 +401,198 @@ function scanSurroundings(world, x, z, r = 24) {
     }
   }
   return { structures, flat, samples, maxH, minH, relief: maxH - minH };
+}
+
+// ---------------------------------------------------------------------------
+// Encuesta de terreno 3D (v6) — "concepción del entorno" y aprendizaje
+// ---------------------------------------------------------------------------
+// Antes la IA solo miraba heightAt() en el momento de buscar sitio: no
+// recordaba nada, no distinguía un bosque de una casa ni una loma de un
+// llano, y volvía a tropezar con lo mismo. Ahora cada ciudad guarda un
+// mapa 3D aprendido:
+//  - radio 128 bloques alrededor del centro (mucho más que el radio de la
+//    ciudad, 28-72), muestreado cada 4 bloques para no generar el mundo
+//    entero de golpe;
+//  - por columna, perfil 3D: altura del suelo, bloque superior, altura de
+//    árboles y altura de estructuras (no solo "alto/bajo");
+//  - se aprende de dos formas: explorando por sectores (256 columnas por
+//    tanda, como mucho una tanda cada 5 s por ciudad) y caminando (cada
+//    aldeano registra la columna por la que pasa);
+//  - de ese mapa salen los "sitios planos recordados" (flatSpots), que
+//    findBuildSite prueba ANTES de buscar a ciegas.
+// El mapa es aproximado por diseño (paso 4): antes de construir en un
+// sitio recordado se vuelve a verificar en detalle con isFlat().
+const SURVEY_RADIUS = 128, SURVEY_STEP = 4, SURVEY_BATCH = 256;
+
+function classifyColumn(world, x, z, h) {
+  const top = world.getBlock(x, h, z);
+  let treeH = 0, structH = 0;
+  for (let y = h + 1; y <= h + 8; y++) {
+    const b = world.getBlock(x, y, z);
+    if (b === 4 || b === 5) treeH = Math.max(treeH, y - h);
+    if (STRUCTURE_BLOCKS.has(b)) structH = Math.max(structH, y - h);
+  }
+  let kind = 'tierra';
+  if (structH > 0) kind = 'estructura';
+  else if (treeH > 0) kind = 'bosque';
+  else if (top === 6) kind = 'arena';
+  else if (top === 3) kind = 'roca';
+  else if (top === 1) kind = 'hierba';
+  else if (top === 2) kind = 'tierra';
+  return { h, top, treeH, structH, kind };
+}
+
+function surveyColumn(world, city, x, z) {
+  const h = world.heightAt(x, z);
+  const rec = classifyColumn(world, x, z, h);
+  const key = x + ',' + z;
+  const old = city.survey.get(key);
+  if (old) city.surveyStats[old.kind] = Math.max(0, (city.surveyStats[old.kind] || 0) - 1);
+  city.survey.set(key, rec);
+  city.surveyStats[rec.kind] = (city.surveyStats[rec.kind] || 0) + 1;
+  // Sitio plano recordado: sus 4 vecinos muestreados están a ±1 de altura.
+  // v6-fix: se reevalúa la columna nueva Y sus vecinas, porque si no
+  // solo se detectarían en una segunda pasada completa (los vecinos
+  // +x/+z se muestrean después, así que en el momento de muestrear una
+  // columna sus vecinos futuros aún no existían y nunca se marcaba).
+  const tryFlat = (cx, cz) => {
+    const r = city.survey.get(cx + ',' + cz);
+    if (!r || r.kind === 'estructura' || r.kind === 'bosque') return;
+    const nb = [[SURVEY_STEP, 0], [-SURVEY_STEP, 0], [0, SURVEY_STEP], [0, -SURVEY_STEP]]
+      .map(([dx, dz]) => city.survey.get((cx + dx) + ',' + (cz + dz)));
+    if (nb.every(n => n && Math.abs(n.h - r.h) <= 1)) {
+      if (!city.flatSpots.some(s => s.x === cx && s.z === cz))
+        city.flatSpots.push({ x: cx, z: cz, y: r.h });
+      if (city.flatSpots.length > 200) city.flatSpots.shift();
+    }
+  };
+  tryFlat(x, z);
+  for (const [dx, dz] of [[SURVEY_STEP, 0], [-SURVEY_STEP, 0], [0, SURVEY_STEP], [0, -SURVEY_STEP]])
+    tryFlat(x + dx, z + dz);
+  return rec;
+}
+
+function surveyBatch(world, city) {
+  if (!city.surveyGrid) {
+    city.surveyGrid = [];
+    for (let dx = -SURVEY_RADIUS; dx <= SURVEY_RADIUS; dx += SURVEY_STEP)
+      for (let dz = -SURVEY_RADIUS; dz <= SURVEY_RADIUS; dz += SURVEY_STEP)
+        if (dx * dx + dz * dz <= SURVEY_RADIUS * SURVEY_RADIUS)
+          city.surveyGrid.push([dx, dz]);
+  }
+  const grid = city.surveyGrid;
+  for (let i = 0; i < SURVEY_BATCH; i++) {
+    const [dx, dz] = grid[city.surveyIdx % grid.length];
+    city.surveyIdx++;
+    surveyColumn(world, city, city.cx + dx, city.cz + dz);
+  }
+  city.lastSurveyAt = Date.now();
+}
+
+// ---------------------------------------------------------------------------
+// Aplanado (v6) — si no hay sitio plano, se crea uno
+// ---------------------------------------------------------------------------
+// findFlattenSite: mismo muestreo aleatorio que findBuildSite, pero sin
+// exigir llano; se queda con el candidato de menor relieve que no se
+// solape con nada ni tenga estructuras encima (aplanar una casa ajena
+// no: eso sería destruirla, no preparar terreno).
+function findFlattenSite(world, city, sizeW, sizeD, preferEdge = false) {
+  const baseX = city.cx, baseZ = city.cz, sites = city.sites;
+  const maxR = Math.max(city.radius + 16, 40);
+  const minR = preferEdge ? Math.max(10, city.radius * 0.55) : 5;
+  let best = null;
+  for (let attempt = 0; attempt < 48; attempt++) {
+    const ring = minR + Math.random() * (maxR - minR);
+    const ang = Math.random() * Math.PI * 2;
+    const ox = baseX + Math.round(Math.cos(ang) * ring) - Math.floor(sizeW / 2);
+    const oz = baseZ + Math.round(Math.sin(ang) * ring) - Math.floor(sizeD / 2);
+    if (overlapsSites(sites, ox, oz, sizeW, sizeD)) continue;
+    let minH = 999, maxH = -999;
+    for (let dx = 0; dx < sizeW; dx++) for (let dz = 0; dz < sizeD; dz++) {
+      const h = world.heightAt(ox + dx, oz + dz);
+      minH = Math.min(minH, h); maxH = Math.max(maxH, h);
+    }
+    const h0 = world.heightAt(ox, oz);
+    if (areaHasStructure(world, ox, h0, oz, sizeW, sizeD, 8)) continue;
+    const ground = world.getBlock(ox, h0, oz);
+    if (ground !== 1 && ground !== 2 && ground !== 6) continue;
+    const relief = maxH - minH;
+    const distC = Math.hypot(ox - baseX, oz - baseZ);
+    if (!best || relief < best.relief || (relief === best.relief && distC < best.distC))
+      best = { x: ox, z: oz, y: h0, w: sizeW, d: sizeD, relief, distC };
+  }
+  return best;
+}
+
+// Bloques para aplanar un rectángulo a la altura más frecuente del mismo:
+// por encima: quitar (id 0) de arriba abajo; por debajo: rellenar con
+// tierra (id 2) hasta la altura objetivo. Se calcula con el mundo REAL
+// (columna sólida más alta, no solo heightAt), así que también corta
+// árboles y lomas, no solo tierra.
+function computeFlattenBlocks(world, site) {
+  const counts = {};
+  for (let dx = 0; dx < site.w; dx++) for (let dz = 0; dz < site.d; dz++)
+    counts[world.heightAt(site.x + dx, site.z + dz)] = (counts[world.heightAt(site.x + dx, site.z + dz)] || 0) + 1;
+  let targetY = site.y, bestN = -1;
+  for (const k in counts) if (counts[k] > bestN) { bestN = counts[k]; targetY = Number(k); }
+  const blocks = [];
+  for (let dx = 0; dx < site.w; dx++) for (let dz = 0; dz < site.d; dz++) {
+    const x = site.x + dx, z = site.z + dz;
+    let top = -1;
+    for (let y = 63; y >= 0; y--) if (world.getBlock(x, y, z)) { top = y; break; }
+    if (top < 0) continue;
+    if (top > targetY) {
+      for (let y = top; y > targetY; y--) blocks.push([dx, y - targetY, dz, 0]);
+    } else if (top < targetY) {
+      for (let y = top + 1; y <= targetY; y++) blocks.push([dx, y - targetY, dz, 2]);
+    }
+  }
+  // Quitar primero (de arriba abajo), rellenar después.
+  blocks.sort((a, b) => b[1] - a[1]);
+  return { blocks, targetY };
+}
+
+function placeBlockLikeBuild(world, tx, ty, tz, id) {
+  if (id === 0) { if (world.getBlock(tx, ty, tz)) world.setBlock(tx, ty, tz, 0); }
+  else { const cur = world.getBlock(tx, ty, tz); if (!cur || cur === 1 || cur === 2) world.setBlock(tx, ty, tz, id); }
+}
+
+// Siembra y avance (v6) — ver "Construir antes de llegar" más abajo.
+export function seedVillageProgress(world, city) {
+  if (city.seeded) return 0;
+  city.seeded = true;
+  const plan = pickPlan(null, 3);
+  const site = findBuildSite(world, null, city, plan.w, plan.d, false);
+  if (!site) return 0;
+  const proj = createProject(city, plan, site, null);
+  const n = Math.min(40, Math.floor(plan.blocks.length * 0.4));
+  for (let i = 0; i < n; i++) {
+    const [dx, dy, dz, id] = proj.plan[i];
+    placeBlockLikeBuild(world, proj.ox + dx, proj.oy + dy, proj.oz + dz, id);
+  }
+  proj.idx = n; proj.attempted = n;
+  return n;
+}
+
+export function applyCatchUp(world, city, nowMs = Date.now()) {
+  if (!city.lastSeen) { city.lastSeen = nowMs; return 0; }
+  const elapsed = (nowMs - city.lastSeen) / 1000;
+  city.lastSeen = nowMs;
+  if (elapsed < 10) return 0;
+  // ~6 bloques/s de obra en total, con tope: simula el tiempo fuera sin
+  // que al volver aparezca una ciudad entera de golpe.
+  let budget = Math.min(240, Math.floor(elapsed * 6));
+  let placed = 0;
+  for (const proj of city.projects) {
+    while (budget > 0 && proj.idx < proj.plan.length) {
+      const [dx, dy, dz, id] = proj.plan[proj.idx];
+      placeBlockLikeBuild(world, proj.ox + dx, proj.oy + dy, proj.oz + dz, id);
+      proj.idx++; proj.attempted = (proj.attempted || 0) + 1; budget--; placed++;
+    }
+    if (proj.idx >= proj.plan.length) proj.done = true;
+    if (budget <= 0) break;
+  }
+  return placed;
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +663,7 @@ export function createVillagerData(x, z, existingJobs = []) {
     // se recalculaba cada frame y tickBuild la sobrescribía al siguiente.
     detour: null, detourT: 0, avoidAng: null, avoidSide: 0,
     flyOver: false, stuckFails: 0,
+    pendingBuild: null, pendingT: 0, savedWa: null,
     flying: false, flyTarget: null,
     power: job.rank * 10 + Math.floor(Math.random() * 5),
     title: job.label,
@@ -500,6 +710,33 @@ function tryStartOrJoinBuild(e, world, city) {
     return true;
   }
 
+  // v6: retomar un aplanado abandonado (su aldeano desapareció, por
+  // ejemplo al alejarse el jugador). Se recalcula con el mundo actual,
+  // así que lo ya aplanado no se repite; si ya está plano, se construye
+  // directamente. Solo se retoma si nadie lo tocó en 15 s.
+  for (const s of city.sites) {
+    if (!s.flatten || !s.flattenPlan) continue;
+    if (Date.now() - (s.flattenAt || 0) < 15000) continue;
+    const fb = computeFlattenBlocks(world, { x: s.x, z: s.z, y: s.flattenY, w: s.w, d: s.d });
+    s.flattenAt = Date.now();
+    if (!fb.blocks.length) {
+      const proj = createProject(city, s.flattenPlan, { x: s.x, y: fb.targetY, z: s.z }, e.id);
+      city.sites = city.sites.filter(o => o !== s);
+      const slice = claimWorkSlice(proj, e.id, e.rank >= 2 ? 40 : 24);
+      if (!slice) return false;
+      e.job = 'build';
+      e.build = { projectId: proj.id, name: proj.name, slice: slice.blocks, localIdx: 0, placeCd: 0, ox: proj.ox, oy: proj.oy, oz: proj.oz, cooperative: proj.minWorkers > 1 };
+      return true;
+    }
+    e.job = 'build';
+    e.build = {
+      projectId: null, name: 'aplanar', flatten: true, afterPlan: s.flattenPlan,
+      slice: fb.blocks, localIdx: 0, placeCd: 0,
+      ox: s.x, oy: fb.targetY, oz: s.z, siteEntry: s, cooperative: false,
+    };
+    return true;
+  }
+
   if (Math.random() > jobDef.buildBias) return false;
 
   const prefer = preferredCategory(city, e.jobId);
@@ -507,7 +744,26 @@ function tryStartOrJoinBuild(e, world, city) {
   const plan = pickPlan(prefer, maxW);
   const edge = plan.category === 'militar' && plan.name !== 'torre';
   const site = findBuildSite(world, e.home, city, plan.w, plan.d, edge);
-  if (!site) return false;
+  if (!site) {
+    // v6: sin sitio plano, NO se rinde: se aplana uno. El aldeano
+    // destruye lo alto y rellena lo bajo, y al terminar construye ahí
+    // mismo (ver tickBuild, caso flatten). Sin esto, en terreno
+    // quebrado la aldea simplemente nunca crecía.
+    const fs = findFlattenSite(world, city, plan.w, plan.d, edge);
+    if (!fs) return false;
+    const fb = computeFlattenBlocks(world, fs);
+    if (!fb.blocks.length) return false;
+    const entry = { x: fs.x, z: fs.z, w: plan.w, d: plan.d, category: plan.category, flatten: true, flattenPlan: plan, flattenY: fb.targetY, flattenAt: Date.now() };
+    city.sites.push(entry);
+    expandCityRadius(city, entry);
+    e.job = 'build';
+    e.build = {
+      projectId: null, name: 'aplanar', flatten: true, afterPlan: plan,
+      slice: fb.blocks, localIdx: 0, placeCd: 0,
+      ox: fs.x, oy: fb.targetY, oz: fs.z, siteEntry: entry, cooperative: false,
+    };
+    return true;
+  }
 
   const proj = createProject(city, plan, site, e.id);
   const slice = claimWorkSlice(proj, e.id, e.rank >= 2 ? 40 : 24);
@@ -596,14 +852,29 @@ function flyOverAltitude(world, e, tx, tz) {
 // ---------------------------------------------------------------------------
 // Construcción
 // ---------------------------------------------------------------------------
-function tickBuild(e, dt, world) {
+function tickBuild(e, dt, world, city) {
   const b = e.build;
   if (!b || b.localIdx >= b.slice.length) {
+    // v6: al terminar de aplanar, construir ahí mismo (no volver a
+    // buscar sitio a ciegas: el sitio ya está reservado y plano).
+    if (b && b.flatten && b.afterPlan && city) {
+      const site = { x: b.ox, y: b.oy, z: b.oz };
+      if (b.siteEntry) city.sites = city.sites.filter(o => o !== b.siteEntry);
+      const proj = createProject(city, b.afterPlan, site, e.id);
+      const slice = claimWorkSlice(proj, e.id, e.rank >= 2 ? 40 : 24);
+      if (slice) {
+        e.job = 'build';
+        e.build = { projectId: proj.id, name: proj.name, slice: slice.blocks, localIdx: 0, placeCd: 0, ox: proj.ox, oy: proj.oy, oz: proj.oz, cooperative: proj.minWorkers > 1 };
+        e.flying = false; e.flyTarget = null; e.detour = null; e.flyOver = false;
+        return { mx: 0, mz: 0, sp: 0 };
+      }
+    }
     e.job = null; e.build = null;
     e.thinkT = 4 + Math.random() * 8;
     e.flying = false; e.flyTarget = null; e.detour = null; e.flyOver = false;
     return null;
   }
+  if (b.flatten && b.siteEntry) b.siteEntry.flattenAt = Date.now();
 
   const [dx, dy, dz, id] = b.slice[b.localIdx];
   const tx = b.ox + dx, ty = b.oy + dy, tz = b.oz + dz;
@@ -612,8 +883,10 @@ function tickBuild(e, dt, world) {
 
   const canFly = (JOBS[e.jobId] || {}).canFly !== false;
 
-  // FIX: no-flyers nunca alcanzan bloques altos → saltar el bloque
-  if (!canFly && Math.abs(distY) > 3.5) {
+  // FIX: no-flyers nunca alcanzan bloques altos → saltar el bloque.
+  // v6: en aplanado NO se salta: quitar una loma o un árbol desde abajo
+  // es justo el trabajo (alcance vertical 6,5 en vez de 3,5).
+  if (!canFly && Math.abs(distY) > 3.5 && !b.flatten) {
     b.localIdx++;
     return { mx: 0, mz: 0, sp: 0 };
   }
@@ -659,7 +932,7 @@ function tickBuild(e, dt, world) {
     e.flying = false; e.flyTarget = null;
   }
 
-  if (distH > 2.4 || Math.abs(distY) > 3.5) {
+  if (distH > 2.4 || Math.abs(distY) > (b.flatten ? 6.5 : 3.5)) {
     // Pared en medio y no puede volar: rodearla antes de seguir recto.
     if (pathBlocked && !e.detour) {
       const d = findDetour(world, e, tx, tz);
@@ -679,14 +952,13 @@ function tickBuild(e, dt, world) {
   b.placeCd -= dt;
   if (b.placeCd > 0) return { mx: 0, mz: 0, sp: 0 };
 
-  if (id === 0) {
-    if (world.getBlock(tx, ty, tz)) world.setBlock(tx, ty, tz, 0);
-  } else {
-    const cur = world.getBlock(tx, ty, tz);
-    if (!cur || cur === 1 || cur === 2) world.setBlock(tx, ty, tz, id);
-  }
+  placeBlockLikeBuild(world, tx, ty, tz, id);
 
   b.localIdx++;
+  if (city && b.projectId) {
+    const proj = city.projects.find(p => p.id === b.projectId);
+    if (proj) proj.attempted = (proj.attempted || 0) + 1;
+  }
   const rankBonus = (e.rank || 0) * 0.04;
   b.placeCd = Math.max(0.08, 0.16 + Math.random() * 0.12 - rankBonus);
   return { mx: 0, mz: 0, sp: 0 };
@@ -698,8 +970,12 @@ function tickBuild(e, dt, world) {
 function avoidStructures(e, mx, mz, sp, world, dt) {
   if (sp < 0.01 || e.flying) return { mx, mz, sp };
 
-  const nx = e.pos.x + mx * sp * dt * 4;
-  const nz = e.pos.z + mz * sp * dt * 4;
+  // v6: mirar 0,9 bloques por delante, no 0,08. Con el avance anterior
+  // (sp*dt*4) la celda de delante era casi siempre la propia, así que
+  // la pared solo se "detectaba" cuando entities.js ya había chocado
+  // contra ella y el aldeano se deslizaba pegado a ella.
+  const nx = e.pos.x + mx * 0.9;
+  const nz = e.pos.z + mz * 0.9;
   const fy = feetY(e);
   const fx = Math.floor(nx), fz = Math.floor(nz);
 
@@ -734,6 +1010,27 @@ function avoidStructures(e, mx, mz, sp, world, dt) {
     }
   }
 
+  // v6: desplazándose (sin construir) también se rodea: el destino
+  // aproximado es 14 bloques en la dirección actual, y el rodeo
+  // persistente lo gestiona updateVillager (antes el rodeo solo
+  // existía en tickBuild, así que al caminar no había rodeo que valga).
+  if (e.job !== 'build') {
+    const len = Math.hypot(mx, mz) || 1;
+    const px = Math.floor(e.pos.x + (mx / len) * 14);
+    const pz = Math.floor(e.pos.z + (mz / len) * 14);
+    const d = findDetour(world, e, px, pz);
+    if (d) {
+      // Guardar la dirección original: sin esto, al terminar el rodeo
+      // el aldeano seguía en dirección del rodeo para siempre (eso era
+      // parte del "se va para otro lado / no evade" al caminar).
+      if (e.savedWa === null || e.savedWa === undefined) e.savedWa = e.wa;
+      e.detour = d; e.detourT = 12; e.stuckT = 0;
+      const ang = Math.atan2(d.z - e.pos.z, d.x - e.pos.x);
+      e.wa = ang;
+      return { mx: Math.cos(ang), mz: Math.sin(ang), sp: sp * 0.95 };
+    }
+  }
+
   // Último recurso tras ~5 s bloqueado (antes 2,2 s y cancelaba TODA la
   // obra: el trozo ya reclamado quedaba sin colocar para siempre y la
   // construcción quedaba con huecos). Ahora: 1) si puede volar, vuela
@@ -755,7 +1052,7 @@ function avoidStructures(e, mx, mz, sp, world, dt) {
       e.stuckFails = 0; e.detour = null;
       return { mx: 0, mz: 0, sp: 0 };
     }
-    e.wa = null; e.thinkT = 0;
+    e.wa = null; e.thinkT = 0; e.timer = 0; // timer: los guardias usan timer, no thinkT
     return { mx: 0, mz: 0, sp: 0 };
   }
 
@@ -855,7 +1152,13 @@ function tickJobBehavior(e, dt, world, city, ctx) {
     const distHome = Math.hypot(e.pos.x - e.home.x, e.pos.z - e.home.z);
     if (distHome > 16) e.wa = Math.atan2(e.home.z - e.pos.z, e.home.x - e.pos.x);
   }
-  if (e.wa !== null && e.avoidT <= 0) {
+  // v6: quitar el gate "avoidT <= 0". Ese gate era la segunda causa de
+  // que al caminar no se evadieran paredes: durante la evasión el
+  // aldeano devolvía sp=0, así que avoidStructures nunca se llamaba
+  // (sp < 0,01) y la evasión expiraba sin moverse; luego volvía recto
+  // a la pared. Ahora devuelve su dirección y avoidStructures la
+  // transforma si hay pared delante.
+  if (e.wa !== null) {
     mx = Math.cos(e.wa); mz = Math.sin(e.wa); sp = VILLAGER_TYPE.sp * 0.55;
   }
   return { mx, mz, sp };
@@ -892,15 +1195,42 @@ export function updateVillager(e, dt, ctx) {
   if (e.avoidT > 0) { e.avoidT -= dt; if (e.avoidT <= 0) { e.avoidAng = null; e.avoidSide = 0; } }
   if (e.detourT > 0) e.detourT -= dt;
 
+  // v6: aprendizaje al caminar + encuesta por sectores + marca de
+  // actividad (esta marca es la que permite el avance simulado al volver).
+  if (Date.now() - (city.lastSeen || 0) > 1000) city.lastSeen = Date.now();
+  if (Math.floor(e.pos.x) !== e.lastPos.x || Math.floor(e.pos.z) !== e.lastPos.z) {
+    e.lastPos = { x: Math.floor(e.pos.x), z: Math.floor(e.pos.z) };
+    surveyColumn(world, city, e.lastPos.x, e.lastPos.z);
+  }
+  if ((e.jobId === 'explorador' || e.jobId === 'arquitecto' || e.jobId === 'rey' || e.jobId === 'alcalde') &&
+      Date.now() - (city.lastSurveyAt || 0) > 5000) {
+    surveyBatch(world, city);
+  }
+
   if (e.job === 'build' && e.build) {
-    const move = tickBuild(e, dt, world);
+    const move = tickBuild(e, dt, world, city);
     if (move) { mx = move.mx; mz = move.mz; sp = move.sp; }
   } else {
     const move = tickJobBehavior(e, dt, world, city, ctx);
     if (move) { mx = move.mx; mz = move.mz; sp = move.sp; }
     if (e.job === 'build' && e.build) {
-      const m2 = tickBuild(e, dt, world);
+      const m2 = tickBuild(e, dt, world, city);
       if (m2) { mx = m2.mx; mz = m2.mz; sp = m2.sp; }
+    }
+  }
+
+  // v6: el rodeo vale para TODOS los desplazamientos, no solo para
+  // construir. Sin esto, el rodeo que avoidStructures calculaba al
+  // caminar se perdía porque tickJobBehavior volvía a su dirección.
+  if (e.detour && !e.flying) {
+    const dd = Math.hypot(e.pos.x - e.detour.x, e.pos.z - e.detour.z);
+    if (dd < 1.0 || e.detourT <= 0) {
+      e.detour = null; e.detourT = 0;
+      if (e.savedWa !== null && e.savedWa !== undefined) { e.wa = e.savedWa; e.savedWa = null; }
+    }
+    else {
+      const ang = Math.atan2(e.detour.z - e.pos.z, e.detour.x - e.pos.x);
+      e.wa = ang; mx = Math.cos(ang); mz = Math.sin(ang); sp = VILLAGER_TYPE.sp * 0.95;
     }
   }
 

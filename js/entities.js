@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { VILLAGER_TYPE, createVillagerData, updateVillager, JOBS } from './villagers.js';
+import { VILLAGER_TYPE, createVillagerData, updateVillager, JOBS, getOrCreateCity, seedVillageProgress, applyCatchUp } from './villagers.js';
 
 export const CHARACTERS = [
   { id: 'explorador', name: 'Explorador', skin: '#c68b6a', hair: '#3a2a1a', shirt: '#2aa7a7', pants: '#3a3a9a' },
@@ -169,14 +169,38 @@ export class Entities {
     const rx0 = Math.floor(px / 64), rz0 = Math.floor(pz / 64);
     for (let rx = rx0 - 1; rx <= rx0 + 1; rx++) for (let rz = rz0 - 1; rz <= rz0 + 1; rz++) {
       const v = w.villageAt(rx, rz), key = rx + ',' + rz;
-      if (v && !this.villages.has(key) && Math.hypot(v.x - px, v.z - pz) < 60) {
+      if (!v || Math.hypot(v.x - px, v.z - pz) >= 60) continue;
+      if (!this.villages.has(key)) {
         this.villages.add(key);
         // Registrar las 4 casas pregeneradas para que la IA no construya encima
         for (const [ox, oz] of [[-10, -10], [4, -10], [-10, 4], [4, 4]]) {
           this.buildSites.push({ x: v.x + ox, z: v.z + oz, w: 6, d: 6 });
         }
+        // v6: la aldea NO empieza de cero al llegar. Antes de que
+        // aparezcan los aldeanos, se siembra una obra ya a medias
+        // (hasta 40 bloques), como si llevaran tiempo construyendo.
+        const city = getOrCreateCity(v.x, v.z);
+        for (const s of this.buildSites) {
+          if (!city.sites.some(c => c.x === s.x && c.z === s.z))
+            city.sites.push({ x: s.x, z: s.z, w: s.w || 6, d: s.d || 6, category: 'vivienda' });
+        }
+        seedVillageProgress(w, city);
         for (let i = 0; i < 8; i++) {
           this.add('villager', v.x + Math.floor(Math.random() * 9) - 4 + .5, v.z + Math.floor(Math.random() * 9) - 4 + .5);
+        }
+      } else {
+        // v6: al VOLVER a una aldea ya visitada, si quedan pocos
+        // aldeanos vivos se reponen y la obra avanza según el tiempo
+        // fuera (con tope, ver applyCatchUp). Sin esto, al alejarse
+        // los aldeanos desaparecían y su obra quedaba congelada hasta
+        // que el jugador volviera a estar encima de ellos.
+        const city = getOrCreateCity(v.x, v.z);
+        const alive = this.list.filter(e => e.type === 'villager' && e.cityId === city.id).length;
+        if (alive < 4) {
+          applyCatchUp(w, city);
+          for (let i = alive; i < 8; i++) {
+            this.add('villager', v.x + Math.floor(Math.random() * 9) - 4 + .5, v.z + Math.floor(Math.random() * 9) - 4 + .5);
+          }
         }
       }
     }
@@ -270,8 +294,10 @@ export class Entities {
         if (!tryMove(nx, e.pos.z) && !tryMove(e.pos.x, nz)) {
           e.wa = null;
           e.timer = 0.25;
-          // Pequeño impulso aleatorio para no quedarse frizado
-          if (k === 'villager') {
+          // Pequeño impulso aleatorio para no quedarse frizado.
+          // v6: NO si hay un rodeo activo: ese impulso aleatorio
+          // pisaba la dirección del rodeo y el aldeano volvía a la pared.
+          if (k === 'villager' && !e.detour) {
             e.wa = Math.random() * Math.PI * 2;
             e.timer = 0.6;
           }
