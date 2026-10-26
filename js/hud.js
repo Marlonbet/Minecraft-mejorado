@@ -51,9 +51,10 @@ export class HUD {
     });
   }
   
-  update(player, blockName, fps = 0) {
+  update(player, blockName, fps = 0, extra = '') {
     this.hudEl.textContent =
       `X ${player.pos.x.toFixed(1)}  Y ${player.pos.y.toFixed(1)}  Z ${player.pos.z.toFixed(1)}\n` +
-      `${blockName}  ·  ${Math.round(fps)} FPS${player.flying ? '  ·  Volando' : ''}`;
+      `${blockName}  ·  ${Math.round(fps)} FPS${player.flying ? '  ·  Volando' : ''}` +
+      (extra ? `\n${extra}` : '');
   }
 }

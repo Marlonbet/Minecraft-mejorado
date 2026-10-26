@@ -95,6 +95,8 @@ body.touch #crosshair{display:none}
 .world-item b{display:block;font-size:14px;margin-bottom:2px}
 .world-meta{font-size:11px;opacity:.85;line-height:1.6}
 .world-actions{display:flex;gap:6px;margin-top:8px}
+#orderBtns{flex-wrap:wrap;margin-bottom:8px}
+#orderBtns button{flex:1 1 40%}
 .world-actions button{flex:1;padding:8px;font:12px monospace;color:#fff;
   background:#7d7d7d;border:3px solid #000;cursor:pointer;
   box-shadow:inset -2px -2px #3a3a3a,inset 2px 2px #bdbdbd}

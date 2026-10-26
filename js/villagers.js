@@ -33,6 +33,18 @@ export const JOBS = {
   explorador:  { rank: 0, label: 'Explorador',  color: '#4a7c59', canDirect: false, canFly: true,  buildBias: 0.20 },
 };
 
+// ---------------------------------------------------------------------------
+// Orden del jugador (v8, IA por reglas, sin API)
+// ---------------------------------------------------------------------------
+// null = sin orden (cada aldeano sigue su oficio). 'build' = todos a
+// construir, 'rest' = todos a descansar, 'gather' = todos al centro.
+// Es global, no por ciudad: la orden es del jugador, no de un alcalde.
+let playerOrder = null;
+export function setPlayerOrder(t) {
+  playerOrder = (t === 'build' || t === 'rest' || t === 'gather') ? t : null;
+}
+export function getPlayerOrder() { return playerOrder; }
+
 const JOB_WEIGHTS = [
   ['constructor', 40],
   ['granjero', 18],
@@ -665,6 +677,10 @@ export function createVillagerData(x, z, existingJobs = []) {
     flyOver: false, stuckFails: 0,
     pendingBuild: null, pendingT: 0, savedWa: null,
     flying: false, flyTarget: null,
+    // v8: necesidades por reglas. Energía 100 -> baja solo construyendo;
+    // al llegar a 25 el aldeano descansa (va al centro, recupera) hasta
+    // 85 y retoma su obra SIN cancelarla (ver updateVillager).
+    energy: 100, resting: false, aiState: 'work',
     power: job.rank * 10 + Math.floor(Math.random() * 5),
     title: job.label,
   };
@@ -695,7 +711,9 @@ function tryStartOrJoinBuild(e, world, city) {
   for (const proj of city.projects) {
     if (proj.done) continue;
     // FIX: eliminar el gate por proj.workers.size (nunca se limpia → bloquea obras grandes)
-    if (jobDef.buildBias < 0.4 && Math.random() > jobDef.buildBias) continue;
+    // v8: con orden de construir, el sesgo no salta ninguna obra: todos
+    // intentan unirse a la obra abierta, aunque su oficio construya poco.
+    if (jobDef.buildBias < 0.4 && playerOrder !== 'build' && Math.random() > jobDef.buildBias) continue;
 
     const slice = claimWorkSlice(proj, e.id, e.rank >= 2 ? 36 : 20);
     if (!slice || !slice.blocks.length) continue;
@@ -737,7 +755,14 @@ function tryStartOrJoinBuild(e, world, city) {
     return true;
   }
 
-  if (Math.random() > jobDef.buildBias) return false;
+  // v8: NO abrir una obra nueva si hay otra sin terminar. Antes, un
+  // aldeano con poco sesgo de construir podía saltarse la obra abierta
+  // (por el gate aleatorio) y abrir otra: dos frentes a medias y
+  // ninguna terminada. Ahora, si hay obra abierta, o se une a ella o
+  // vaga/descansa, pero no abre otra.
+  if (city.projects.some(p => !p.done)) return false;
+
+  if (playerOrder !== 'build' && Math.random() > jobDef.buildBias) return false;
 
   const prefer = preferredCategory(city, e.jobId);
   const maxW = e.rank >= 2 ? 6 : 3;
@@ -1072,6 +1097,17 @@ function tickJobBehavior(e, dt, world, city, ctx) {
   let mx = 0, mz = 0, sp = 0;
   const jobId = e.jobId;
 
+  // v8: con orden de construir, hasta guardia y explorador (que nunca
+  // construían) intentan unirse a la obra, con su propio temporizador
+  // para no intentar construir cada frame. Si no hay obra ni sitio,
+  // siguen con su oficio normal.
+  if (playerOrder === 'build' && (jobId === 'guardia' || jobId === 'explorador')) {
+    if (e.timer <= 0) {
+      e.timer = 4 + Math.random() * 3;
+      if (tryStartOrJoinBuild(e, world, city)) return null;
+    }
+  }
+
   if (jobId === 'guardia') {
     if (e.timer <= 0) {
       e.timer = 3 + Math.random() * 4;
@@ -1175,6 +1211,34 @@ function applyFlight(e, dt) {
 }
 
 // ---------------------------------------------------------------------------
+// Prioridades v8 (IA por reglas): descanso, huida, reunión
+// ---------------------------------------------------------------------------
+function moveTo(e, tx, tz, sp) {
+  const dx = tx - e.pos.x, dz = tz - e.pos.z, d = Math.hypot(dx, dz) || 1;
+  e.wa = Math.atan2(dz, dx);
+  return { mx: dx / d, mz: dz / d, sp };
+}
+function nearestZombie(e, zombies) {
+  if (!zombies || !zombies.length) return null;
+  let best = null, bd = 1e9;
+  for (const z of zombies) {
+    const d = Math.hypot(z.x - e.pos.x, z.z - e.pos.z);
+    if (d < bd) { bd = d; best = z; }
+  }
+  return bd < 14 ? best : null;
+}
+// Descansar: ir al centro, quedarse quieto y recuperar energía.
+// No toca e.build: la obra queda en pausa, no cancelada.
+function restMove(e, dt, city) {
+  e.flying = false; e.flyTarget = null;
+  e.energy = Math.min(100, (e.energy ?? 100) + dt * 6);
+  if (e.energy >= 85) e.resting = false;
+  const d = Math.hypot(city.cx - e.pos.x, city.cz - e.pos.z);
+  if (d > 3) return moveTo(e, city.cx, city.cz, VILLAGER_TYPE.sp * 0.95);
+  return { mx: 0, mz: 0, sp: 0 };
+}
+
+// ---------------------------------------------------------------------------
 // Update principal
 // ---------------------------------------------------------------------------
 export function updateVillager(e, dt, ctx) {
@@ -1207,7 +1271,39 @@ export function updateVillager(e, dt, ctx) {
     surveyBatch(world, city);
   }
 
-  if (e.job === 'build' && e.build) {
+  // v8: prioridades, en orden, ANTES del oficio. 1) Orden descansar.
+  // 2) Peligro: zombi a menos de 14 bloques -> al centro, todos
+  // (incluido el guardia: no hay sistema de combate de aldeanos, así
+  // que fingir que ataca sería mentira; se refugian juntos).
+  // 3) Cansancio: descansando hasta recuperar energía. 4) Orden
+  // reunirse. En todos los casos la obra queda en pausa, no se
+  // cancela: cancelarla perdería el trozo ya reclamado, porque el
+  // índice del proyecto ya avanzó al reclamarlo.
+  let overrideMove = null;
+  const order = playerOrder;
+  const zb = nearestZombie(e, ctx.zombies);
+  if (order === 'rest') {
+    e.aiState = 'rest'; e.detour = null;
+    overrideMove = restMove(e, dt, city);
+  } else if (zb) {
+    e.aiState = 'flee'; e.detour = null; e.flying = false; e.flyTarget = null;
+    const dc = Math.hypot(city.cx - e.pos.x, city.cz - e.pos.z);
+    overrideMove = dc > 3 ? moveTo(e, city.cx, city.cz, VILLAGER_TYPE.sp) : { mx: 0, mz: 0, sp: 0 };
+  } else if (e.resting) {
+    e.aiState = 'rest';
+    overrideMove = restMove(e, dt, city);
+    if (!e.resting) e.aiState = 'work';
+  } else if (order === 'gather') {
+    e.aiState = 'gather'; e.detour = null; e.flying = false; e.flyTarget = null;
+    const dc = Math.hypot(city.cx - e.pos.x, city.cz - e.pos.z);
+    overrideMove = dc > 4 ? moveTo(e, city.cx, city.cz, VILLAGER_TYPE.sp * 0.95) : { mx: 0, mz: 0, sp: 0 };
+  } else {
+    e.aiState = 'work';
+  }
+
+  if (overrideMove) {
+    mx = overrideMove.mx; mz = overrideMove.mz; sp = overrideMove.sp;
+  } else if (e.job === 'build' && e.build) {
     const move = tickBuild(e, dt, world, city);
     if (move) { mx = move.mx; mz = move.mz; sp = move.sp; }
   } else {
@@ -1217,6 +1313,13 @@ export function updateVillager(e, dt, ctx) {
       const m2 = tickBuild(e, dt, world, city);
       if (m2) { mx = m2.mx; mz = m2.mz; sp = m2.sp; }
     }
+  }
+
+  // v8: construir cansa. Solo baja trabajando (no vagando, no huyendo,
+  // no descansando). A 25 o menos, el aldeano pasa a descansar.
+  if (!overrideMove && e.job === 'build' && e.build) {
+    e.energy = Math.max(0, (e.energy ?? 100) - dt * 0.7);
+    if (e.energy <= 25) e.resting = true;
   }
 
   // v6: el rodeo vale para TODOS los desplazamientos, no solo para

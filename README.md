@@ -10,7 +10,7 @@ A partir de ahí abres el juego desde su icono, a pantalla completa, y siempre
 verás la última versión publicada: cada actualización que se sube a este repo
 se publica sola en ese mismo enlace, sin cambiar la dirección.
 
-Versión actual: v7 (2026-10-26).
+Versión actual: v8 (2026-10-26).
 - Paredes al desplazarse: la evasión ya no solo funciona al construir.
   Antes, al caminar, la dirección se anulaba durante la evasión y la
   pared solo se detectaba a 0,08 bloques; ahora se mira 0,9 bloques por
@@ -39,3 +39,19 @@ Cambios v7:
   menú del juego con Guardar mundo (además del guardado automático al
   editar), Continuar, Mundos y ajustes y Pantalla inicial.
 - Botones de vuelo ya no invertidos: subir ⬆️ arriba y bajar ⬇️ debajo.
+
+Cambios v8 (IA por reglas, sin API):
+- Necesidades: construir cansa (energía 100 -> a 25 el aldeano va al
+  centro a descansar y recupera hasta 85); la obra queda en pausa, NO
+  se cancela, porque cancelar perdería el trozo ya reclamado.
+- Peligro: con un zombi a menos de 14 bloques, todos los aldeanos van
+  al centro a refugiarse (el guardia también: no hay combate de
+  aldeanos, así que no se finge que ataque).
+- Reparto: ya no se abre una obra nueva si hay otra sin terminar; o
+  se unen a la abierta o vagan/descansan. Antes, un aldeano con poco
+  sesgo de construir podía saltarse la obra abierta y abrir otra.
+- Órdenes del jugador en el menú del juego (☰): Construir (hasta
+  guardia y explorador construyen), Descansar, Reunirse en el centro,
+  Sin orden. Al cambiar de mundo la orden se limpia.
+- HUD: línea con nº de aldeanos, cuántos construyen, descansan y
+  huyen, y la orden activa.

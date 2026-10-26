@@ -225,6 +225,9 @@ export class Entities {
     const w = this.world, px = pl.pos.x, pz = pl.pos.z;
     this.spawnT -= dt;
     if (this.spawnT <= 0) { this.spawnT = 1.5; this.trySpawn(px, pz, dayF); }
+    // v8: posiciones de zombis para la huida de aldeanos (se calcula
+    // una vez por frame, no una por aldeano).
+    const zombies = this.list.filter(z => z.type === 'zombie').map(z => z.pos);
     for (let i = this.list.length - 1; i >= 0; i--) {
       const e = this.list[i], T = e.T, k = T.kind;
       const dx = px - e.pos.x, dz = pz - e.pos.z, d = Math.hypot(dx, dz) || 1e-3;
@@ -242,6 +245,7 @@ export class Entities {
           buildSites: this.buildSites,
           buildingCount,
           dayF,
+          zombies,
         });
         mx = move.mx; mz = move.mz; sp = move.sp;
       } else if (k === 'zombie' || (k === 'wolf' && dayF < 0.3)) {   // cazadores

@@ -10,7 +10,7 @@ import { HUD } from './hud.js';
 import { voxelRaycast } from './raycast.js';
 import { Settings } from './settings.js';
 import { Entities, CHARACTERS, randomChar, humanoid } from './entities.js';
-import { getCities } from './villagers.js';
+import { getCities, setPlayerOrder, getPlayerOrder } from './villagers.js';
 import { Minimap } from './minimap.js';
 
 const isTouch = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
@@ -363,6 +363,7 @@ function loadWorld(w) {
 
   world.seed = w.seed;
   world.edits = w.edits || {};
+  setPlayerOrder(null);   // v8: al cambiar de mundo, sin orden heredada
   creative = w.mode !== 'survival';
   timeOfDay = typeof w.timeOfDay === 'number' ? w.timeOfDay : 0.25;
   currentWorld = w;
@@ -411,6 +412,7 @@ function openGameMenu() {
   const gm = document.getElementById('gameMenuWorld');
   gm.textContent = `${currentWorld.name || 'Mundo'} · ${creative ? 'Creativo ✨' : 'Supervivencia ⛏️'} · Semilla ${world.seed}`;
   document.getElementById('saveMsg').textContent = '';
+  updateOrderMsg();
   showScreen('gameMenuScreen');
   gameMenuBtn.classList.add('hidden');
   syncSliderUI();
@@ -499,6 +501,20 @@ document.getElementById('saveWorldBtn').addEventListener('click', () => {
   document.getElementById('saveMsg').textContent = ok
     ? `Guardado ✓ ${new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}`
     : 'No se pudo guardar: el almacenamiento local está lleno. Borra un mundo y vuelve a intentarlo.';
+});
+// v8: órdenes para los aldeanos, desde el menú del juego.
+function updateOrderMsg() {
+  const o = getPlayerOrder();
+  document.getElementById('orderMsg').textContent = o === 'build' ? 'Orden: 🏗️ Todos a construir'
+    : o === 'rest' ? 'Orden: 😴 Todos a descansar'
+    : o === 'gather' ? 'Orden: 📍 Todos al centro'
+    : 'Sin orden: cada aldeano sigue su oficio';
+}
+document.querySelectorAll('#orderBtns button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    setPlayerOrder(btn.dataset.order || null);
+    updateOrderMsg();
+  });
 });
 document.getElementById('resumeBtn').addEventListener('click', () => { startGame(); });
 document.getElementById('openMenuBtn').addEventListener('click', () => { renderWorldsList(); showScreen('menuScreen'); });
@@ -793,9 +809,18 @@ function frame(now) {
       if (placeFlashTime <= 0) placeFlash.visible = false;
     }
 
-    // --- HUD ---
+    // --- HUD: estado de la IA de aldeanos (v8) ---
     const curBlock = BLOCKS[BLOCK_IDS[hud.selected]];
-    hud.update(player, curBlock.name, fps);
+    const vs = entities.list.filter(v => v.type === 'villager');
+    let villageLine = '';
+    if (vs.length) {
+      const n = s => vs.filter(v => v.aiState === s).length;
+      const building = vs.filter(v => v.job === 'build').length;
+      const o = getPlayerOrder();
+      villageLine = `Aldeanos: ${vs.length} · ${building} construyendo · ${n('rest')} descansando · ${n('flee')} huyendo` +
+        (o === 'build' ? ' · Orden: construir' : o === 'rest' ? ' · Orden: descansar' : o === 'gather' ? ' · Orden: reunirse' : '');
+    }
+    hud.update(player, curBlock.name, fps, villageLine);
 
     // --- Chunks sucios ---
     world.update(player.pos.x, player.pos.z);
