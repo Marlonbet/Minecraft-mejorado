@@ -21,6 +21,7 @@ export class Input {
     this.mouseBreakHeld = false;
     this.mousePlacePressed = false;
     this.mousePlaceHeld = false;
+    this.mouseMiddlePressed = false; // v9: clic central = copiar bloque
 
     // Táctil: máquina de estados
     this.touchState = 'idle';       // 'idle' | 'pending' | 'breaking' | 'look'
@@ -107,7 +108,10 @@ export class Input {
       if (!document.pointerLockElement) return;
       if (e.button === 0) { this.mouseBreakPressed = true; this.mouseBreakHeld = true; }
       if (e.button === 2) { this.mousePlacePressed = true; this.mousePlaceHeld = true; }
+      if (e.button === 1) { this.mouseMiddlePressed = true; }
     });
+    // v9: prevenir el autoscroll del navegador con el botón central.
+    canvas.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
     canvas.addEventListener('pointerup', e => {
       if (this.isTouch) return;
       if (e.button === 0) this.mouseBreakHeld = false;

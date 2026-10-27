@@ -127,6 +127,38 @@ function ore(c) {
   };
 }
 
+function snow(ctx, ox, oy) {
+  px(ctx, ox, oy, '#f2f7fa', S);
+  noise(ctx, ox, oy, ['#e2ecf2', '#ffffff', '#d5e2ea'], 0.5);
+}
+
+function lamp(ctx, ox, oy) {
+  px(ctx, ox, oy, '#ffcf3d', S);
+  noise(ctx, ox, oy, ['#ffdf6b', '#ffb800', '#ffe89a'], 0.5);
+  for (let i = 0; i < S; i++) {
+    px(ctx, ox + i, oy, '#7a5a10');
+    px(ctx, ox + i, oy + S - 1, '#7a5a10');
+    px(ctx, ox, oy + i, '#7a5a10');
+    px(ctx, ox + S - 1, oy + i, '#7a5a10');
+  }
+}
+
+// Cristal: la mayor parte de la celda queda transparente (alfa 0) y
+// solo se dibujan marco y brillo. Con alphaTest en el material del
+// chunk, esos píxeles se descartan y se ve a través del bloque.
+function glass(ctx, ox, oy) {
+  ctx.clearRect(ox, oy, S, S);
+  const edge = 'rgba(190,225,245,0.95)';
+  for (let i = 0; i < S; i++) {
+    px(ctx, ox + i, oy, edge);
+    px(ctx, ox + i, oy + S - 1, edge);
+    px(ctx, ox, oy + i, edge);
+    px(ctx, ox + S - 1, oy + i, edge);
+  }
+  const shine = 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < S - 4; i++) px(ctx, ox + 3 + i, oy + S - 5 - i, shine);
+}
+
 const TILES = {
   '3,2': ore('#222222'),
   '0,3': ore('#d8b090'),
@@ -141,6 +173,9 @@ const TILES = {
   '2,1': leaves,
   '3,1': sand,
   '0,2': brick,
+  '1,3': glass,
+  '2,3': snow,
+  '3,3': lamp,
 };
 
 export function buildAtlas() {

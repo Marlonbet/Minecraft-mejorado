@@ -10,8 +10,11 @@ import { HUD } from './hud.js';
 import { voxelRaycast } from './raycast.js';
 import { Settings } from './settings.js';
 import { Entities, CHARACTERS, randomChar, humanoid } from './entities.js';
-import { getCities, setPlayerOrder, getPlayerOrder } from './villagers.js';
+import { getCities, setPlayerOrder, getPlayerOrder, setPlaceListener } from './villagers.js';
 import { Minimap } from './minimap.js';
+import { SoundFX } from './audio.js';
+import { Particles } from './particles.js';
+import { Sky, formatGameTime } from './sky.js';
 
 const isTouch = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 document.body.classList.add(isTouch ? 'touch' : 'desktop');
@@ -94,7 +97,7 @@ if (isTouch && screen.orientation && screen.orientation.lock) {
 
 const ambient = new THREE.AmbientLight(0xffffff, 1.0);
 scene.add(ambient);
-const SKY_DAY = new THREE.Color(0x87ceeb), SKY_NIGHT = new THREE.Color(0x070a14);
+const AMBIENT_WARM = new THREE.Color(0xff9a4a);
 let timeOfDay = 0.25;
 
 // ---------- Atlas + material ----------
@@ -103,16 +106,36 @@ const chunkMaterial = new THREE.MeshLambertMaterial({
   map: atlas,
   vertexColors: true,
   side: THREE.FrontSide,
+  // v9: el cristal deja la mayor parte de su celda en alfa 0; con
+  // alphaTest esos píxeles se descartan y se ve a través. El resto
+  // de celdas son opacas, así que no les afecta.
+  alphaTest: 0.5,
 });
 
 // ---------- Crack atlas ----------
 const { texture: crackTex, stages: CRACK_STAGES } = buildCrackAtlas();
 
 // ---------- Mundo ----------
-const world = new VoxelWorld(isTouch ? 4 : 6);   // distancia de render menor en móvil
+const world = new VoxelWorld(settings.get('renderDist'));   // v9: desde ajustes
 world.init(scene, chunkMaterial);
 scene.fog.near = world.rd * 8;
 scene.fog.far = world.rd * 16 - 6;
+
+// ---------- Sonido, partículas y cielo (v9) ----------
+const audio = new SoundFX();
+audio.setVolume(settings.get('volume') / 100);
+// El audio solo arranca tras un gesto del usuario (Safari iPhone).
+const unlockAudio = () => audio.resume();
+addEventListener('pointerdown', unlockAudio);
+addEventListener('keydown', unlockAudio);
+const particles = new Particles(scene);
+const sky = new Sky(scene);
+// Partículas cuando un aldeano coloca: solo si está dentro de la
+// distancia de dibujado, por rendimiento.
+setPlaceListener((x, y, z, id) => {
+  if (Math.hypot(x - player.pos.x, z - player.pos.z) > world.rd * 16) return;
+  particles.spawn(x + 0.5, y + 0.5, z + 0.5, BLOCKS[id].color, 8);
+});
 
 // ---------- Jugador ----------
 // v7: el punto de aparición se fija al cargar un mundo (loadWorld, más
@@ -194,6 +217,18 @@ setCharacter(pal);
 const entities = new Entities(scene, world);
 const minimap = new Minimap(document.getElementById('minimap'));
 const heartsEl = document.getElementById('hearts'), dmgEl = document.getElementById('dmg');
+
+// ---------- Avisos tipo toast (v9) ----------
+const toastEl = document.getElementById('toast');
+let toastTimer = 0;
+function showToast(text, ms = 2500) {
+  if (!toastEl) return;
+  toastEl.textContent = text;
+  toastEl.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('on'), ms);
+}
+
 const atkO = new THREE.Vector3();
 let hp = 20, regen = 0, fallY = player.pos.y, mmT = 0;
 function drawHearts() {
@@ -205,9 +240,10 @@ function drawHearts() {
 function hurt(n) {
   if (creative || hp <= 0) return;
   hp = Math.max(0, hp - n);
+  audio.hurt();
   dmgEl.classList.add('on'); setTimeout(() => dmgEl.classList.remove('on'), 150);
   if (navigator.vibrate) navigator.vibrate(60);
-  if (hp <= 0) { hp = 20; player.pos.copy(player.spawn); player.vel.set(0, 0, 0); fallY = player.pos.y; }
+  if (hp <= 0) { showToast('Has muerto'); hp = 20; player.pos.copy(player.spawn); player.vel.set(0, 0, 0); fallY = player.pos.y; }
   drawHearts();
 }
 function doAttack() {
@@ -238,6 +274,10 @@ const sensSlider = document.getElementById('sensSlider');
 const fovSlider = document.getElementById('fovSlider');
 const sensVal = document.getElementById('sensVal');
 const fovVal = document.getElementById('fovVal');
+const volSlider = document.getElementById('volSlider');
+const volVal = document.getElementById('volVal');
+const rdSlider = document.getElementById('rdSlider');
+const rdVal = document.getElementById('rdVal');
 const btnDown = document.getElementById('btnDown');
 
 let creative = true;   // lo fija el mundo que se carga, no un botón global
@@ -260,6 +300,7 @@ function toggleFly() {
   if (!creative) return;
   player.flying = !player.flying;
   player.vel.y = 0;
+  showToast(player.flying ? 'Volar activado' : 'Volar desactivado');
 }
 
 // ---------- Mundos guardados (local, en este dispositivo) ----------
@@ -345,6 +386,13 @@ function saveCurrentWorld() {
   try { persistWorlds(); return true; }
   catch (_) { return false; }
 }
+// v9: guardado automático cada 30 s y al ocultar o cerrar la app.
+// saveCurrentWorld ya guarda la posición del jugador (no solo las
+// ediciones): antes solo se disparaba al editar bloques, así que la
+// posición se perdía si no se tocaba ningún bloque antes de salir.
+setInterval(() => { if (playing && currentWorld) saveCurrentWorld(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (document.hidden && currentWorld) saveCurrentWorld(); });
+addEventListener('pagehide', () => { if (currentWorld) saveCurrentWorld(); });
 // El guardado automático tras editar bloques usa lo mismo, en silencio.
 world.saveHandler = () => { saveCurrentWorld(); };
 
@@ -433,6 +481,14 @@ function syncSliderUI() {
   fovSlider.value = fov;
   sensVal.textContent = `${sens.toFixed(1)}×`;
   fovVal.textContent = `${fov}°`;
+  if (volSlider) {
+    volSlider.value = settings.get('volume');
+    volVal.textContent = `${settings.get('volume')}%`;
+  }
+  if (rdSlider) {
+    rdSlider.value = settings.get('renderDist');
+    rdVal.textContent = `${settings.get('renderDist')} chunks`;
+  }
 }
 
 // Sincronización inmediata + red de seguridad por si el DOM aún no estuviera listo
@@ -452,6 +508,16 @@ fovSlider.addEventListener('input', () => {
   fovVal.textContent = `${v}°`;
   settings.set('fov', v);   // persiste el valor elegido por el usuario
 });
+if (volSlider) volSlider.addEventListener('input', () => {
+  const v = parseInt(volSlider.value, 10);
+  volVal.textContent = `${v}%`;
+  settings.set('volume', v);
+});
+if (rdSlider) rdSlider.addEventListener('input', () => {
+  const v = parseInt(rdSlider.value, 10);
+  rdVal.textContent = `${v} chunks`;
+  settings.set('renderDist', v);
+});
 
 settings.onChange((key, value) => {
   if (key === 'fov') {
@@ -460,6 +526,13 @@ settings.onChange((key, value) => {
     camera.updateProjectionMatrix();
   }
   if (key === 'sensitivity') input.setSensitivity(value);
+  if (key === 'volume') audio.setVolume(value / 100);
+  if (key === 'renderDist') {
+    world.rd = value;
+    scene.fog.near = value * 8;
+    scene.fog.far = value * 16 - 6;
+    if (currentWorld) world.update(player.pos.x, player.pos.z, 999);
+  }
 });
 
 // ---------- Botones de las pantallas ----------
@@ -601,6 +674,8 @@ function placeBlockAt(target) {
   if (!creative && !(inv[id] > 0)) return;
   world.setBlock(px, py, pz, id);
   if (!creative) inv[id]--;
+  audio.placeBlock(id);
+  particles.spawn(px + 0.5, py + 0.5, pz + 0.5, BLOCKS[id].color, 6);
 
   // Feedback: flash verde
   placeFlash.position.set(px + 0.5, py + 0.5, pz + 0.5);
@@ -623,11 +698,15 @@ const BREAK_TIMES = {
   10: 1.0, 11: 1.2,  // menas
   8: 0.60,  // tablones
   9: 0.90,  // adoquín
+  12: 0.30, // cristal
+  13: 0.40, // nieve
+  14: 0.50, // lámpara
 };
 
 // Estado de rotura en curso (touch)
 let breaking = null; // { tx, ty, tz, type, progress }
 let placeCooldown = 0;
+let stepAcc = 0; // distancia acumulada para los pasos (v9)
 let fovBoost = 0, fps = 60;
 
 function startBreakingFromNDC(ndcX, ndcY) {
@@ -659,8 +738,11 @@ function tickBreaking(dt) {
   breaking.progress += dt / breakTime;
 
   if (breaking.progress >= 1) {
-    if (!creative) inv[breaking.type] = (inv[breaking.type] || 0) + 1;
+    const brokenType = breaking.type;
+    if (!creative) inv[brokenType] = (inv[brokenType] || 0) + 1;
     world.setBlock(breaking.tx, breaking.ty, breaking.tz, 0);
+    audio.breakBlock(brokenType);
+    particles.spawn(breaking.tx + 0.5, breaking.ty + 0.5, breaking.tz + 0.5, BLOCKS[brokenType].color, 14);
     if (navigator.vibrate) navigator.vibrate(15);
     cancelBreaking();
     return;
@@ -678,6 +760,8 @@ function breakBlockAt(target) {
   const type = world.getBlock(target.x, target.y, target.z);
   if (!type) return;
   world.setBlock(target.x, target.y, target.z, 0);
+  audio.breakBlock(type);
+  particles.spawn(target.x + 0.5, target.y + 0.5, target.z + 0.5, BLOCKS[type].color, 14);
   if (navigator.vibrate) navigator.vibrate(10);
 }
 
@@ -705,12 +789,29 @@ function frame(now) {
     input.readMovement();
     player.update(dt, input, yaw);
 
-    // Ciclo día/noche (5 min)
+    // v9: pasos al caminar (cada ~2,2 bloques, con el material del
+    // suelo). Solo en tierra y sin volar.
+    if (player.onGround && !player.flying) {
+      const spd = Math.hypot(player.vel.x, player.vel.z);
+      if (spd > 0.5) {
+        stepAcc += spd * dt;
+        if (stepAcc >= 2.2) {
+          stepAcc = 0;
+          const gb = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y - 0.1), Math.floor(player.pos.z));
+          if (gb) audio.step(gb);
+        }
+      } else stepAcc = 0;
+    } else stepAcc = 0;
+
+    // Ciclo día/noche (5 min) + cielo (v9: sol, luna, estrellas,
+    // nubes y atardeceres; el color de fondo/niebla viene de ahí).
     timeOfDay = (timeOfDay + dt / 300) % 1;
     const dayF = Math.min(1, Math.max(0, Math.sin(timeOfDay * Math.PI * 2) * 1.5 + 0.35));
-    scene.background.copy(SKY_NIGHT).lerp(SKY_DAY, dayF);
-    scene.fog.color.copy(scene.background);
+    const skyRes = sky.update(dt, timeOfDay, dayF, camera.position);
+    scene.background.copy(skyRes.bg);
+    scene.fog.color.copy(skyRes.bg);
     ambient.intensity = 0.28 + 0.72 * dayF;
+    ambient.color.setHex(0xffffff).lerp(AMBIENT_WARM, skyRes.sunset * 0.35);
     btnDown.classList.toggle('hidden', !player.flying);
     hud.setCounts(inv, creative);
 
@@ -778,6 +879,16 @@ function frame(now) {
         breakHighlight.visible = false;
       }
 
+      // v9: clic central = copiar el bloque apuntado a la hotbar.
+      if (input.mouseMiddlePressed) {
+        input.mouseMiddlePressed = false;
+        if (target) {
+          const t = world.getBlock(target.x, target.y, target.z);
+          const idx = BLOCK_IDS.indexOf(t);
+          if (idx >= 0) hud.setSelected(idx);
+        }
+      }
+
       // Romper manteniendo clic (con grietas, igual que en táctil)
       if (input.mouseBreakPressed) {
         input.mouseBreakPressed = false;
@@ -809,6 +920,9 @@ function frame(now) {
       if (placeFlashTime <= 0) placeFlash.visible = false;
     }
 
+    // --- Partículas (v9) ---
+    particles.update(dt);
+
     // --- HUD: estado de la IA de aldeanos (v8) ---
     const curBlock = BLOCKS[BLOCK_IDS[hud.selected]];
     const vs = entities.list.filter(v => v.type === 'villager');
@@ -820,7 +934,7 @@ function frame(now) {
       villageLine = `Aldeanos: ${vs.length} · ${building} construyendo · ${n('rest')} descansando · ${n('flee')} huyendo` +
         (o === 'build' ? ' · Orden: construir' : o === 'rest' ? ' · Orden: descansar' : o === 'gather' ? ' · Orden: reunirse' : '');
     }
-    hud.update(player, curBlock.name, fps, villageLine);
+    hud.update(player, curBlock.name, fps, villageLine, formatGameTime(timeOfDay));
 
     // --- Chunks sucios ---
     world.update(player.pos.x, player.pos.z);
@@ -828,8 +942,19 @@ function frame(now) {
     input.jumpPressed = false;
   }
 
+  // El cielo solo se ve en partida (en los menús lo tapa el overlay).
+  sky.group.visible = playing;
+
   renderer.render(scene, camera);
 }
 
 resize();                 // aplica tamaño + FOV efectivo (con clamp geométrico si toca)
 requestAnimationFrame(frame);
+
+// ---------- Modo offline (v9) ----------
+// Service worker con caché versionada, solo archivos de texto de la
+// app (index, css, js, manifest). En file:// o sin HTTPS falla y se
+// ignora: el juego sigue funcionando igual, solo sin caché offline.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}

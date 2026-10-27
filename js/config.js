@@ -45,6 +45,10 @@ export const BLOCKS = {
 };
 BLOCKS[10] = { name: 'Carbón', color: '#222', noHotbar: true, textures: { all: [3,2] } };
 BLOCKS[11] = { name: 'Hierro', color: '#d8b090', noHotbar: true, textures: { all: [0,3] } };
+// v9: cristal transparente, nieve de cimas y lámpara que brilla de noche.
+BLOCKS[12] = { name: 'Cristal', color: '#bfe4f5', transparent: true, textures: { all: [1,3] } };
+BLOCKS[13] = { name: 'Nieve', color: '#f2f7fa', textures: { all: [2,3] } };
+BLOCKS[14] = { name: 'Lámpara', color: '#ffcf3d', textures: { all: [3,3] } };
 export const BLOCK_IDS = Object.keys(BLOCKS).map(Number).filter(id => !BLOCKS[id].noHotbar);
 
 // ===== Caras del cubo (vértices en CCW visto desde fuera) =====

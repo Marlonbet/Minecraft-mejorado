@@ -564,9 +564,22 @@ function computeFlattenBlocks(world, site) {
   return { blocks, targetY };
 }
 
-function placeBlockLikeBuild(world, tx, ty, tz, id) {
+// v9: aviso de colocación para las partículas de main.js. Solo se
+// dispara al colocar de verdad (no al quitar) y solo en obra en vivo:
+// la siembra y el avance simulado pasan quiet=true para no soltar
+// decenas de ráfagas de golpe. La IA no cambia.
+let placeListener = null;
+export function setPlaceListener(fn) { placeListener = fn; }
+
+function placeBlockLikeBuild(world, tx, ty, tz, id, quiet = false) {
   if (id === 0) { if (world.getBlock(tx, ty, tz)) world.setBlock(tx, ty, tz, 0); }
-  else { const cur = world.getBlock(tx, ty, tz); if (!cur || cur === 1 || cur === 2) world.setBlock(tx, ty, tz, id); }
+  else {
+    const cur = world.getBlock(tx, ty, tz);
+    if (!cur || cur === 1 || cur === 2) {
+      world.setBlock(tx, ty, tz, id);
+      if (!quiet && placeListener) placeListener(tx, ty, tz, id);
+    }
+  }
 }
 
 // Siembra y avance (v6) — ver "Construir antes de llegar" más abajo.
@@ -580,7 +593,7 @@ export function seedVillageProgress(world, city) {
   const n = Math.min(40, Math.floor(plan.blocks.length * 0.4));
   for (let i = 0; i < n; i++) {
     const [dx, dy, dz, id] = proj.plan[i];
-    placeBlockLikeBuild(world, proj.ox + dx, proj.oy + dy, proj.oz + dz, id);
+    placeBlockLikeBuild(world, proj.ox + dx, proj.oy + dy, proj.oz + dz, id, true);
   }
   proj.idx = n; proj.attempted = n;
   return n;
@@ -598,7 +611,7 @@ export function applyCatchUp(world, city, nowMs = Date.now()) {
   for (const proj of city.projects) {
     while (budget > 0 && proj.idx < proj.plan.length) {
       const [dx, dy, dz, id] = proj.plan[proj.idx];
-      placeBlockLikeBuild(world, proj.ox + dx, proj.oy + dy, proj.oz + dz, id);
+      placeBlockLikeBuild(world, proj.ox + dx, proj.oy + dy, proj.oz + dz, id, true);
       proj.idx++; proj.attempted = (proj.attempted || 0) + 1; budget--; placed++;
     }
     if (proj.idx >= proj.plan.length) proj.done = true;

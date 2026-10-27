@@ -10,21 +10,29 @@ A partir de ahí abres el juego desde su icono, a pantalla completa, y siempre
 verás la última versión publicada: cada actualización que se sube a este repo
 se publica sola en ese mismo enlace, sin cambiar la dirección.
 
-Versión actual: v8 (2026-10-26).
-- Paredes al desplazarse: la evasión ya no solo funciona al construir.
-  Antes, al caminar, la dirección se anulaba durante la evasión y la
-  pared solo se detectaba a 0,08 bloques; ahora se mira 0,9 bloques por
-  delante, el rodeo persistente vale para cualquier desplazamiento y al
-  terminar se vuelve a la dirección original.
-- Terreno: si no hay sitio plano, el aldeano lo aplana él mismo
-  (destruye lo alto, incluidos árboles y lomas, y rellena lo bajo con
-  tierra) y luego construye ahí mismo.
-- Mapa 3D aprendido: cada ciudad encuesta su entorno en un radio de 128
-  bloques (perfil por columna: suelo, árboles, estructuras), por sectores
-  y también al caminar, y usa los sitios planos recordados para construir.
-- Antes de llegar: al descubrir una aldea ya hay una obra a medias, y al
-  volver después de un tiempo fuera la obra avanza según ese tiempo
-  (con tope), en vez de empezar de cero solo cuando llegas.
+Versión actual: v9 (2026-10-26).
+- Sonido sintetizado con WebAudio, sin archivos de audio: romper,
+  colocar, pasos y daño, con timbre distinto según el material
+  (madera grave, piedra áspera, cristal ping agudo, etc.).
+- Partículas con el color del bloque al romper y al colocar, también
+  cuando construyen los aldeanos (solo si están cerca).
+- Cielo con sol, luna, estrellas, nubes que se mueven y atardeceres
+  naranjas, enganchado al ciclo día/noche; reloj del juego en el HUD.
+- Bloques nuevos: Cristal (transparente), Nieve (cimas de montañas)
+  y Lámpara (brilla de noche). Las casas de las aldeas tienen
+  ventanas de cristal y una lámpara dentro.
+- Ajustes nuevos: volumen y distancia de dibujado (2-8 chunks, útil
+  para el iPhone), con persistencia y aplicación en vivo.
+- Guardado automático cada 30 s y al cerrar o cambiar de app, con la
+  posición del jugador (antes solo se guardaba al editar bloques).
+- Avisos ("Has muerto", "Volar activado/desactivado"), clic central
+  para copiar el bloque apuntado y modo offline (service worker con
+  caché versionada de los archivos de texto de la app).
+- Rendimiento: la malla de chunks se construye desde un array local
+  acolchado, sin búsquedas repetidas en el mapa de chunks; la malla
+  resultante es idéntica a la de antes.
+- El agua con nado NO entra: tocaría la física y la IA de aldeanos
+  y animales, y queda fuera a petición del usuario.
 
 Cambios v7:
 - Menú viejo destruido: al abrir el juego solo hay dos botones en el
@@ -39,6 +47,22 @@ Cambios v7:
   menú del juego con Guardar mundo (además del guardado automático al
   editar), Continuar, Mundos y ajustes y Pantalla inicial.
 - Botones de vuelo ya no invertidos: subir ⬆️ arriba y bajar ⬇️ debajo.
+
+Cambios v6:
+- Paredes al desplazarse: la evasión ya no solo funciona al construir.
+  Antes, al caminar, la dirección se anulaba durante la evasión y la
+  pared solo se detectaba a 0,08 bloques; ahora se mira 0,9 bloques por
+  delante, el rodeo persistente vale para cualquier desplazamiento y al
+  terminar se vuelve a la dirección original.
+- Terreno: si no hay sitio plano, el aldeano lo aplana él mismo
+  (destruye lo alto, incluidos árboles y lomas, y rellena lo bajo con
+  tierra) y luego construye ahí mismo.
+- Mapa 3D aprendido: cada ciudad encuesta su entorno en un radio de 128
+  bloques (perfil por columna: suelo, árboles, estructuras), por sectores
+  y también al caminar, y usa los sitios planos recordados para construir.
+- Antes de llegar: al descubrir una aldea ya hay una obra a medias, y al
+  volver después de un tiempo fuera la obra avanza según ese tiempo
+  (con tope), en vez de empezar de cero solo cuando llegas.
 
 Cambios v8 (IA por reglas, sin API):
 - Necesidades: construir cansa (energía 100 -> a 25 el aldeano va al

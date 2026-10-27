@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Mini Minecraft v9 -->
   <canvas id="game"></canvas>
 
   <div id="crosshair"></div>
@@ -22,6 +23,7 @@
   <div id="hearts"></div>
   <canvas id="minimap" width="48" height="48"></canvas>
   <div id="dmg"></div>
+  <div id="toast"></div>
 
   <div id="joystick"><div id="knob"></div></div>
 
@@ -86,6 +88,22 @@
           </span>
           <input type="range" id="fovSlider" min="55" max="110" step="1" value="80">
         </label>
+
+        <label class="setting-row">
+          <span class="setting-label">
+            <span>Volumen</span>
+            <b id="volVal">80%</b>
+          </span>
+          <input type="range" id="volSlider" min="0" max="100" step="1" value="80">
+        </label>
+
+        <label class="setting-row">
+          <span class="setting-label">
+            <span>Distancia de dibujado</span>
+            <b id="rdVal">6 chunks</b>
+          </span>
+          <input type="range" id="rdSlider" min="2" max="8" step="1" value="6">
+        </label>
       </div>
 
       <ul class="touch-only">
@@ -102,6 +120,7 @@
         <li><b>Espacio</b> saltar · <b>Shift</b> correr</li>
         <li><b>Doble espacio / F</b> volar (Shift baja)</li>
         <li><b>Clic izq./der.</b> romper (mantener) / colocar</li>
+        <li><b>Clic central</b> copiar el bloque apuntado</li>
         <li><b>1–9 / rueda</b> elegir bloque</li>
         <li><b>Esc</b> menú del juego</li>
       </ul>

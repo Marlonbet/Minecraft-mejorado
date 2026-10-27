@@ -81,7 +81,7 @@ export class VoxelWorld {
       hm[lz * CS + lx] = h;
       for (let y = 0; y <= h; y++) {
         let t;
-        if (y === h) t = h <= BEACH ? 6 : (h >= PEAK ? 3 : 1);
+        if (y === h) t = h <= BEACH ? 6 : (h >= PEAK ? 13 : 1);
         else if (y >= h - 3) t = h <= BEACH ? 6 : 2;
         else {
           t = 3;
@@ -114,11 +114,14 @@ export class VoxelWorld {
         for (let y = 1; y <= 3; y++) {
           let t = edge ? (corner ? 4 : 9) : 0;
           if (dz === 0 && (dx === 2 || dx === 3) && y <= 2) t = 0;
-          if (y === 2 && edge && !corner && (((dx === 0 || dx === 5) && dz === 2) || (dz === 5 && dx === 2))) t = 0;
+          // v9: las ventanas ya no son huecos de aire, son de cristal.
+          if (y === 2 && edge && !corner && (((dx === 0 || dx === 5) && dz === 2) || (dz === 5 && dx === 2))) t = 12;
           this.put(c, x, v.h + y, z, t);
         }
         this.put(c, x, v.h + 4, z, 8);
       }
+      // v9: una lámpara en el interior, en el centro y bajo el techo.
+      this.put(c, hx + 2, v.h + 3, hz + 2, 14);
     }
     const e = this.edits[cx + ',' + cz];
     if (e) for (const i in e) data[i] = e[i];
